@@ -52,7 +52,7 @@ export default function PDFUploader({ workspaceId, onClose, onSuccess }: PDFUplo
       const pdfjsLib = await import('pdfjs-dist')
       
       // Use a simpler worker setup
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`
       
       setStatus('Creating document record...')
       const { data: { user } } = await supabase.auth.getUser()
