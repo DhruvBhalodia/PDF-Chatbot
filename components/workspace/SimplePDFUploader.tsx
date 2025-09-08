@@ -1,22 +1,27 @@
 'use client'
 
 import { useState, useRef } from 'react'
-import { Upload, X, Loader2, FileText, CheckCircle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import { formatBytes, generateFingerprint } from '@/lib/utils'
+import { Upload, X, Loader2, FileText, CheckCircle } from 'lucide-react'
+import { generateFingerprint, formatBytes } from '@/lib/utils'
+import * as pdfjsLib from 'pdfjs-dist'
 
-interface PDFUploaderProps {
-  workspaceId: string
-  onClose: () => void
-  onSuccess: () => void
+if (typeof window !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
 }
 
-export default function PDFUploader({ workspaceId, onClose, onSuccess }: PDFUploaderProps) {
+interface SimplePDFUploaderProps {
+  workspaceId: string
+  onSuccess: () => void
+  onClose: () => void
+}
+
+export default function SimplePDFUploader({ workspaceId, onSuccess, onClose }: SimplePDFUploaderProps) {
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState('')
   const [progress, setProgress] = useState(0)
   const [status, setStatus] = useState('')
-  const [error, setError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const supabase = createClient()
 
@@ -38,6 +43,24 @@ export default function PDFUploader({ workspaceId, onClose, onSuccess }: PDFUplo
     setError('')
   }
 
+  const extractTextFromPDF = async (file: File): Promise<{ text: string, pageCount: number }> => {
+    const arrayBuffer = await file.arrayBuffer()
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+    const pageCount = pdf.numPages
+    let fullText = ''
+
+    for (let i = 1; i <= pageCount; i++) {
+      const page = await pdf.getPage(i)
+      const textContent = await page.getTextContent()
+      const pageText = textContent.items
+        .map((item: any) => item.str)
+        .join(' ')
+      fullText += pageText + '\n\n'
+    }
+
+    return { text: fullText.trim(), pageCount }
+  }
+
   const processPDF = async () => {
     if (!file) return
 
@@ -46,7 +69,15 @@ export default function PDFUploader({ workspaceId, onClose, onSuccess }: PDFUplo
     setError('')
 
     try {
-      setStatus('Processing PDF...')
+      setStatus('Extracting text from PDF...')
+      setProgress(5)
+      
+      // Extract text from PDF
+      const { text: extractedText, pageCount } = await extractTextFromPDF(file)
+      
+      if (!extractedText || extractedText.length < 10) {
+        throw new Error('Could not extract text from PDF. The document may be empty or contain only images.')
+      }
       
       // Get authenticated user
       const { data: { user } } = await supabase.auth.getUser()
@@ -62,7 +93,7 @@ export default function PDFUploader({ workspaceId, onClose, onSuccess }: PDFUplo
           workspace_id: workspaceId,
           title: file.name,
           byte_size: file.size,
-          page_count: 1, // We'll use a simplified approach
+          page_count: pageCount,
           status: 'processing'
         })
         .select()
@@ -91,8 +122,8 @@ export default function PDFUploader({ workspaceId, onClose, onSuccess }: PDFUplo
         .from('pdf-pages')
         .getPublicUrl(pdfPath)
 
-      // Create a simplified page record
-      setStatus('Saving document data...')
+      // Create page record with extracted text
+      setStatus('Saving extracted text...')
       setProgress(70)
       
       const { error: pageError } = await supabase
@@ -101,9 +132,9 @@ export default function PDFUploader({ workspaceId, onClose, onSuccess }: PDFUplo
           document_id: document.id,
           page_number: 1,
           image_url: publicUrl,
-          text: `PDF Document: ${file.name}`,
-          tokens: 10,
-          fingerprint64: generateFingerprint(file.name)
+          text: extractedText,
+          tokens: extractedText.split(' ').length,
+          fingerprint64: generateFingerprint(extractedText)
         })
 
       if (pageError) throw pageError
@@ -116,7 +147,7 @@ export default function PDFUploader({ workspaceId, onClose, onSuccess }: PDFUplo
         .from('documents')
         .update({ 
           status: 'ready',
-          page_count: 1
+          page_count: pageCount
         })
         .eq('id', document.id)
 

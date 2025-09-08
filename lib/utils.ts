@@ -29,6 +29,15 @@ export function formatBytes(bytes: number, decimals = 2) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i]
 }
 
+export function formatDate(date: string | Date) {
+  const d = typeof date === 'string' ? new Date(date) : date
+  return d.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric'
+  })
+}
+
 export function generateFingerprint(text: string): string {
   let hash = 0
   for (let i = 0; i < text.length; i++) {
