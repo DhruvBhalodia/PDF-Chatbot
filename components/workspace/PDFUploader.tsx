@@ -6,7 +6,25 @@ import { createClient } from '@/lib/supabase/client'
 import { formatBytes, generateFingerprint } from '@/lib/utils'
 import * as pdfjsLib from 'pdfjs-dist'
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
+// Set PDF.js worker with fallback mechanism
+if (typeof window !== 'undefined') {
+  // Try CDN first, fallback to local if it fails
+  const cdnUrl = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.js'
+  const localUrl = '/pdf-worker.js'
+  
+  // Test if CDN is accessible
+  fetch(cdnUrl, { method: 'HEAD', mode: 'no-cors' })
+    .then(() => {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = cdnUrl
+    })
+    .catch(() => {
+      // Fallback to local worker
+      pdfjsLib.GlobalWorkerOptions.workerSrc = localUrl
+    })
+  
+  // Set default immediately to avoid delays
+  pdfjsLib.GlobalWorkerOptions.workerSrc = cdnUrl
+}
 
 interface PDFUploaderProps {
   workspaceId: string
