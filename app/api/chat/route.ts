@@ -58,29 +58,49 @@ export async function POST(request: NextRequest) {
       }, { status: 429 })
     }
 
-    const model = genAI.getGenerativeModel({ model: 'text-embedding-004' })
-    const embeddingResult = await model.embedContent(message)
-    const queryEmbedding = embeddingResult.embedding.values
+    // First check if there are any documents with embeddings
+    const { data: hasEmbeddings } = await serviceSupabase
+      .from('chunks')
+      .select('id', { count: 'exact', head: true })
+      .limit(1)
+    
+    let chunks = null
+    let searchError = null
+    
+    // Only try vector search if embeddings exist
+    if (hasEmbeddings !== null) {
+      try {
+        const model = genAI.getGenerativeModel({ model: 'text-embedding-004' })
+        const embeddingResult = await model.embedContent(message)
+        const queryEmbedding = embeddingResult.embedding.values
 
-    const { data: chunks, error: searchError } = await serviceSupabase.rpc(
-      'match_chunks',
-      {
-        query_embedding: queryEmbedding,
-        workspace_id: workspaceId,
-        match_threshold: 0.7,
-        match_count: 10
+        const result = await serviceSupabase.rpc(
+          'match_chunks',
+          {
+            query_embedding: queryEmbedding,
+            workspace_id: workspaceId,
+            match_threshold: 0.7,
+            match_count: 10
+          }
+        )
+        chunks = result.data
+        searchError = result.error
+      } catch (err) {
+        console.error('Vector search error:', err)
+        // Continue without vector search
       }
-    )
+    }
 
     if (searchError) {
-      console.error('Search error:', searchError)
-      throw new Error('Failed to search documents')
+      console.error('Search error details:', searchError)
+      // Don't throw, continue with fallback
     }
 
     let context = ''
     const sources = new Set()
 
     if (chunks && chunks.length > 0) {
+      // Use vector search results
       for (const chunk of chunks) {
         const { data: page } = await serviceSupabase
           .from('pages')
@@ -98,6 +118,33 @@ export async function POST(request: NextRequest) {
           if (doc) {
             sources.add(`[${doc.title}, Page ${page.page_number}]`)
             context += `\n\n---\nSource: ${doc.title}, Page ${page.page_number}\n${chunk.text}`
+          }
+        }
+      }
+    } else {
+      // Fallback: Use direct page text if no embeddings
+      const { data: documents } = await serviceSupabase
+        .from('documents')
+        .select('*')
+        .eq('workspace_id', workspaceId)
+        .eq('status', 'ready')
+      
+      if (documents && documents.length > 0) {
+        for (const doc of documents) {
+          const { data: pages } = await serviceSupabase
+            .from('pages')
+            .select('*')
+            .eq('document_id', doc.id)
+            .limit(3) // Get first 3 pages for context
+          
+          if (pages && pages.length > 0) {
+            for (const page of pages) {
+              if (page.text && page.text.length > 10) {
+                sources.add(`[${doc.title}, Page ${page.page_number}]`)
+                const preview = page.text.substring(0, 500)
+                context += `\n\n---\nSource: ${doc.title}, Page ${page.page_number}\n${preview}...`
+              }
+            }
           }
         }
       }
