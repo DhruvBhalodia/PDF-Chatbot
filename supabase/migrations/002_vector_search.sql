@@ -23,7 +23,7 @@ BEGIN
   JOIN pages p ON c.page_id = p.id
   JOIN documents d ON p.document_id = d.id
   WHERE 
-    d.workspace_id = workspace_id
+    d.workspace_id = match_chunks.workspace_id
     AND d.status = 'indexed'
     AND 1 - (c.embedding <=> query_embedding) > match_threshold
   ORDER BY c.embedding <=> query_embedding
