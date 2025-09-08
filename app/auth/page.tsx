@@ -34,6 +34,10 @@ export default function AuthPage() {
         email,
         options: {
           shouldCreateUser: true,
+          emailRedirectTo: undefined,
+          data: {
+            email_code_type: 'confirmation'
+          }
         }
       })
       
