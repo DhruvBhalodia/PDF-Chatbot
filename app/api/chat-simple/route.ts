@@ -51,15 +51,40 @@ export async function POST(request: NextRequest) {
       .from('documents')
       .select('*')
       .eq('workspace_id', workspaceId)
-      .eq('status', 'ready')
 
     let context = ''
+    let documentInfo = []
+    
     if (documents && documents.length > 0) {
-      context = `You have access to the following PDF documents in this workspace:\n`
+      // Get page information for each document
       for (const doc of documents) {
-        context += `- ${doc.title} (${doc.page_count} pages)\n`
+        const { data: pages } = await serviceSupabase
+          .from('pages')
+          .select('*')
+          .eq('document_id', doc.id)
+        
+        let pageTexts = []
+        if (pages && pages.length > 0) {
+          pageTexts = pages.map(p => p.text || '').filter(t => t.length > 0)
+        }
+        
+        documentInfo.push({
+          title: doc.title,
+          pageCount: doc.page_count,
+          content: pageTexts.join(' ')
+        })
       }
-      context += `\nPlease answer the user's question based on these documents. If you don't have specific information about the content, let them know you have the document but need more specific text extraction to answer detailed questions.`
+      
+      if (documentInfo.length > 0) {
+        context = `You have access to the following PDF documents:\n\n`
+        for (const doc of documentInfo) {
+          context += `Document: ${doc.title}\n`
+          if (doc.content) {
+            context += `Content preview: ${doc.content.substring(0, 500)}...\n\n`
+          }
+        }
+        context += `\nBased on these documents, please answer the user's question. If the documents don't contain enough detail, explain what information is available and what might be missing.`
+      }
     } else {
       context = 'No documents have been uploaded to this workspace yet.'
     }
