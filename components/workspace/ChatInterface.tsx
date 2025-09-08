@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { Send, Loader2, User, Bot, AlertCircle } from 'lucide-react'
+import { Send, Loader2, User, Bot, AlertCircle, RefreshCw, MessageSquarePlus } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import { createClient } from '@/lib/supabase/client'
 
@@ -17,6 +17,7 @@ export default function ChatInterface({ workspace, documents, initialMessages, u
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [loadingHistory, setLoadingHistory] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const supabase = createClient()
 
@@ -27,6 +28,66 @@ export default function ChatInterface({ workspace, documents, initialMessages, u
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  useEffect(() => {
+    loadMessages()
+    const channel = supabase
+      .channel(`workspace-${workspace.id}-messages`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `workspace_id=eq.${workspace.id}`
+        },
+        (payload) => {
+          if (payload.new && payload.new.user_id !== userId) {
+            setMessages(prev => [...prev, payload.new])
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [workspace.id])
+
+  const loadMessages = async () => {
+    setLoadingHistory(true)
+    try {
+      const { data } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('workspace_id', workspace.id)
+        .order('created_at', { ascending: true })
+        .limit(100)
+      
+      if (data) {
+        setMessages(data)
+      }
+    } catch (err) {
+      console.error('Failed to load messages:', err)
+    } finally {
+      setLoadingHistory(false)
+    }
+  }
+
+  const clearChat = async () => {
+    if (confirm('Are you sure you want to clear the chat history?')) {
+      try {
+        await supabase
+          .from('messages')
+          .delete()
+          .eq('workspace_id', workspace.id)
+        
+        setMessages([])
+      } catch (err) {
+        console.error('Failed to clear chat:', err)
+      }
+    }
+  }
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -44,7 +105,7 @@ export default function ChatInterface({ workspace, documents, initialMessages, u
     setError('')
 
     try {
-      const response = await fetch('/api/chat-simple', {
+      const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -90,6 +151,26 @@ export default function ChatInterface({ workspace, documents, initialMessages, u
 
   return (
     <div className="flex-1 flex flex-col">
+      <div className="px-6 py-3 border-b border-gray-200 bg-white flex items-center justify-between">
+        <h3 className="font-medium text-gray-900">Chat with your PDFs</h3>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={loadMessages}
+            disabled={loadingHistory}
+            className="p-2 hover:bg-gray-100 rounded-lg transition"
+            title="Refresh chat"
+          >
+            <RefreshCw className={`w-4 h-4 text-gray-600 ${loadingHistory ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            onClick={clearChat}
+            className="p-2 hover:bg-gray-100 rounded-lg transition"
+            title="Clear chat"
+          >
+            <MessageSquarePlus className="w-4 h-4 text-gray-600" />
+          </button>
+        </div>
+      </div>
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
         {messages.length === 0 ? (
           <div className="text-center text-gray-500 mt-8">

@@ -7,7 +7,7 @@ import { generateFingerprint, formatBytes } from '@/lib/utils'
 import * as pdfjsLib from 'pdfjs-dist'
 
 if (typeof window !== 'undefined') {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js'
 }
 
 interface SimplePDFUploaderProps {
@@ -43,11 +43,11 @@ export default function SimplePDFUploader({ workspaceId, onSuccess, onClose }: S
     setError('')
   }
 
-  const extractTextFromPDF = async (file: File): Promise<{ text: string, pageCount: number }> => {
+  const extractTextFromPDF = async (file: File): Promise<{ pages: Array<{ text: string, pageNumber: number }>, pageCount: number }> => {
     const arrayBuffer = await file.arrayBuffer()
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
     const pageCount = pdf.numPages
-    let fullText = ''
+    const pages = []
 
     for (let i = 1; i <= pageCount; i++) {
       const page = await pdf.getPage(i)
@@ -55,10 +55,14 @@ export default function SimplePDFUploader({ workspaceId, onSuccess, onClose }: S
       const pageText = textContent.items
         .map((item: any) => item.str)
         .join(' ')
-      fullText += pageText + '\n\n'
+        .trim()
+      
+      if (pageText) {
+        pages.push({ text: pageText, pageNumber: i })
+      }
     }
 
-    return { text: fullText.trim(), pageCount }
+    return { pages, pageCount }
   }
 
   const processPDF = async () => {
@@ -73,11 +77,13 @@ export default function SimplePDFUploader({ workspaceId, onSuccess, onClose }: S
       setProgress(5)
       
       // Extract text from PDF
-      const { text: extractedText, pageCount } = await extractTextFromPDF(file)
+      const { pages: extractedPages, pageCount } = await extractTextFromPDF(file)
       
-      if (!extractedText || extractedText.length < 10) {
+      if (!extractedPages || extractedPages.length === 0) {
         throw new Error('Could not extract text from PDF. The document may be empty or contain only images.')
       }
+      
+      const fullText = extractedPages.map(p => p.text).join('\n\n')
       
       // Get authenticated user
       const { data: { user } } = await supabase.auth.getUser()
@@ -122,20 +128,22 @@ export default function SimplePDFUploader({ workspaceId, onSuccess, onClose }: S
         .from('pdf-pages')
         .getPublicUrl(pdfPath)
 
-      // Create page record with extracted text
+      // Create page records with extracted text for each page
       setStatus('Saving extracted text...')
       setProgress(70)
       
+      const pageRecords = extractedPages.map((page, index) => ({
+        document_id: document.id,
+        page_number: page.pageNumber,
+        image_url: publicUrl,
+        text: page.text,
+        tokens: page.text.split(' ').length,
+        fingerprint64: generateFingerprint(page.text)
+      }))
+      
       const { error: pageError } = await supabase
         .from('pages')
-        .insert({
-          document_id: document.id,
-          page_number: 1,
-          image_url: publicUrl,
-          text: extractedText,
-          tokens: extractedText.split(' ').length,
-          fingerprint64: generateFingerprint(extractedText)
-        })
+        .insert(pageRecords)
 
       if (pageError) throw pageError
 
