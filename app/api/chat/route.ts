@@ -4,18 +4,17 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
 
-const SYSTEM_PROMPT = `You are a professional assistant specialized in answering questions about PDFs. 
-Use only the provided context from the documents to answer questions. 
-When unsure, say you don't know. Prefer precise, cited answers.
-Cite sources using [Document Name, Page X] format.
-Optimize for correctness over verbosity.
+const SYSTEM_PROMPT = `You are a professional assistant specialized in analyzing and answering questions about PDFs. 
+Provide comprehensive, detailed answers based on the document content provided.
+Be thorough in your analysis while maintaining accuracy.
 
 Rules:
-- Use retrieved chunks only; do not hallucinate
-- Aggregate across documents when needed
-- Show concise bullet points when listing
-- Include short rationale for conflicts and choose the most authoritative source
-- If no relevant context is found, politely say you cannot find that information in the documents`
+- Use ALL the provided context to give complete answers
+- When analyzing resumes or documents, provide detailed feedback covering all aspects
+- Include specific examples and quotes from the text when relevant
+- For evaluation questions, provide structured analysis with strengths, weaknesses, and suggestions
+- Cite sources at the END of your response, not inline
+- If asked to analyze quality, provide professional assessment with actionable feedback`
 
 export async function POST(request: NextRequest) {
   try {
@@ -60,20 +59,23 @@ export async function POST(request: NextRequest) {
       }, { status: 429 })
     }
 
-    // First check if there are any documents with embeddings
-    const { data: hasEmbeddings } = await serviceSupabase
-      .from('chunks')
-      .select('id', { count: 'exact', head: true })
-      .limit(1)
+    // First check if there are any chunks for documents in this workspace
+    const { data: workspaceDocs } = await serviceSupabase
+      .from('documents')
+      .select('id')
+      .eq('workspace_id', workspaceId)
+      .eq('status', 'indexed')
     
-    console.log('Checking for embeddings:', hasEmbeddings)
+    const hasChunks = workspaceDocs && workspaceDocs.length > 0
+    
+    console.log('Workspace has indexed documents:', hasChunks)
     
     let chunks = null
     let searchError = null
     
-    // Only try vector search if embeddings exist
-    if (hasEmbeddings !== null) {
-      console.log('Attempting vector search...')
+    // Only try vector search if indexed documents exist for this workspace
+    if (hasChunks) {
+      console.log('Attempting vector search for workspace...')
       try {
         const model = genAI.getGenerativeModel({ model: 'text-embedding-004' })
         const embeddingResult = await model.embedContent(message)
@@ -150,8 +152,9 @@ export async function POST(request: NextRequest) {
             for (const page of pages) {
               if (page.text && page.text.length > 10) {
                 sources.add(`[${doc.title}, Page ${page.page_number}]`)
-                const preview = page.text.substring(0, 500)
-                context += `\n\n---\nSource: ${doc.title}, Page ${page.page_number}\n${preview}...`
+                // Send more text for better context (2000 chars instead of 500)
+                const textContent = page.text.substring(0, 2000)
+                context += `\n\n---\nSource: ${doc.title}, Page ${page.page_number}\nText content:\n${textContent}${page.text.length > 2000 ? '...' : ''}`
               }
             }
           }
