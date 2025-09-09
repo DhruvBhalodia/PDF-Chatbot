@@ -21,6 +21,8 @@ export async function POST(request: NextRequest) {
   try {
     const { workspaceId, message } = await request.json()
     
+    console.log('Chat request:', { workspaceId, message })
+    
     if (!workspaceId || !message) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
@@ -64,11 +66,14 @@ export async function POST(request: NextRequest) {
       .select('id', { count: 'exact', head: true })
       .limit(1)
     
+    console.log('Checking for embeddings:', hasEmbeddings)
+    
     let chunks = null
     let searchError = null
     
     // Only try vector search if embeddings exist
     if (hasEmbeddings !== null) {
+      console.log('Attempting vector search...')
       try {
         const model = genAI.getGenerativeModel({ model: 'text-embedding-004' })
         const embeddingResult = await model.embedContent(message)
@@ -85,6 +90,7 @@ export async function POST(request: NextRequest) {
         )
         chunks = result.data
         searchError = result.error
+        console.log('Vector search result:', chunks?.length || 0, 'chunks found')
       } catch (err) {
         console.error('Vector search error:', err)
         // Continue without vector search
@@ -123,11 +129,14 @@ export async function POST(request: NextRequest) {
       }
     } else {
       // Fallback: Use direct page text if no embeddings
+      console.log('Using fallback: direct page text search')
       const { data: documents } = await serviceSupabase
         .from('documents')
         .select('*')
         .eq('workspace_id', workspaceId)
-        .eq('status', 'ready')
+        .in('status', ['ready', 'indexed'])
+      
+      console.log('Found documents:', documents?.length || 0, 'in workspace:', workspaceId)
       
       if (documents && documents.length > 0) {
         for (const doc of documents) {
@@ -152,14 +161,18 @@ export async function POST(request: NextRequest) {
 
     const chatModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
     
-    const prompt = `${SYSTEM_PROMPT}
+    const prompt = context && context.length > 0 
+      ? `${SYSTEM_PROMPT}
 
 Context from documents:
-${context || 'No relevant context found in the uploaded documents.'}
+${context}
 
 User Question: ${message}
 
-Please provide a helpful answer based on the context above. If the context doesn't contain relevant information, say so clearly.`
+Please provide a helpful answer based on the context above.`
+      : `You are a helpful assistant. The user has uploaded PDFs to this workspace but is asking: "${message}". 
+      
+Based on the available document titles: ${sources.size > 0 ? Array.from(sources).join(', ') : 'documents in the workspace'}, provide a helpful response. If you cannot answer the specific question, explain what kind of information is available in the documents.`
 
     const result = await chatModel.generateContent(prompt)
     const response = result.response.text()
