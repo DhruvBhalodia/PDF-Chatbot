@@ -5,7 +5,6 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { FolderOpen, FileText, Calendar, Trash2, Loader2 } from 'lucide-react'
 import { formatDistanceToNow } from '@/lib/utils'
-import { useToast } from '@/hooks/useToast'
 
 interface Workspace {
   id: string
@@ -21,8 +20,8 @@ interface WorkspaceListProps {
 
 export default function WorkspaceList({ workspaces, userId }: WorkspaceListProps) {
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const router = useRouter()
-  const { showToast } = useToast()
 
   const handleDelete = async (e: React.MouseEvent, workspaceId: string, workspaceName: string) => {
     e.preventDefault()
@@ -33,6 +32,7 @@ export default function WorkspaceList({ workspaces, userId }: WorkspaceListProps
     }
     
     setDeleting(workspaceId)
+    setError(null)
     
     try {
       const response = await fetch(`/api/workspace/delete?id=${workspaceId}`, {
@@ -40,14 +40,14 @@ export default function WorkspaceList({ workspaces, userId }: WorkspaceListProps
       })
       
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Failed to delete workspace')
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to delete workspace')
       }
       
-      showToast('Workspace deleted successfully', 'success')
-      router.refresh()
+      // Success - refresh the page to show updated list
+      window.location.reload()
     } catch (error: any) {
-      showToast(error.message || 'Failed to delete workspace', 'error')
+      setError(error.message || 'Failed to delete workspace')
       setDeleting(null)
     }
   }
@@ -68,7 +68,13 @@ export default function WorkspaceList({ workspaces, userId }: WorkspaceListProps
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+    <>
+      {error && (
+        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+          {error}
+        </div>
+      )}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
       {workspaces.map((workspace) => (
         <div
           key={workspace.id}
@@ -109,6 +115,7 @@ export default function WorkspaceList({ workspaces, userId }: WorkspaceListProps
           </button>
         </div>
       ))}
-    </div>
+      </div>
+    </>
   )
 }

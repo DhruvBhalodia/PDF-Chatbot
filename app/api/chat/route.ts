@@ -109,6 +109,7 @@ export async function POST(request: NextRequest) {
 
     let context = ''
     const sources = new Set()
+    const pageImages: Array<{ mimeType: string; data: string }> = []
 
     if (chunks && chunks.length > 0) {
       // Use vector search results
@@ -155,22 +156,41 @@ export async function POST(request: NextRequest) {
             for (const page of pages) {
               sources.add(`[${doc.title}, Page ${page.page_number}]`)
               
-              // Include both text and image URL for comprehensive analysis
+              // Include text if available
               if (page.text && page.text.length > 10) {
-                // Send more text for better context (2000 chars instead of 500)
                 const textContent = page.text.substring(0, 2000)
                 context += `\n\n---\nSource: ${doc.title}, Page ${page.page_number}\n`
                 context += `Text content:\n${textContent}${page.text.length > 2000 ? '...' : ''}\n`
               } else {
                 context += `\n\n---\nSource: ${doc.title}, Page ${page.page_number}\n`
-                context += `[This page appears to be image-based or scanned content]\n`
+                context += `[This page appears to be image-based or scanned content - analyzing image]\n`
               }
               
-              // Add image URL for Gemini Vision
+              // Fetch and include actual image data for Gemini Vision
               if (page.image_url) {
-                context += `Page snapshot available at: ${page.image_url}\n`
+                try {
+                  // Fetch the image from Supabase storage
+                  const imageResponse = await fetch(page.image_url)
+                  if (imageResponse.ok) {
+                    const imageBuffer = await imageResponse.arrayBuffer()
+                    const base64Image = Buffer.from(imageBuffer).toString('base64')
+                    
+                    pageImages.push({
+                      mimeType: 'image/jpeg',
+                      data: base64Image
+                    })
+                    
+                    // Only include first 3 images to avoid token limits
+                    if (pageImages.length >= 3) break
+                  }
+                } catch (err) {
+                  console.error('Failed to fetch page image:', err)
+                }
               }
             }
+            
+            // Break if we have enough images
+            if (pageImages.length >= 3) break
           }
         }
       }
@@ -178,7 +198,8 @@ export async function POST(request: NextRequest) {
 
     const chatModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-latest' })
     
-    const prompt = context && context.length > 0 
+    // Prepare the prompt with context
+    const textPrompt = context && context.length > 0 
       ? `${SYSTEM_PROMPT}
 
 Context from documents:
@@ -186,12 +207,33 @@ ${context}
 
 User Question: ${message}
 
-Please provide a helpful answer based on the context above.`
+Please provide a helpful answer based on the context and images provided.`
       : `You are a helpful assistant. The user has uploaded PDFs to this workspace but is asking: "${message}". 
       
 Based on the available document titles: ${sources.size > 0 ? Array.from(sources).join(', ') : 'documents in the workspace'}, provide a helpful response. If you cannot answer the specific question, explain what kind of information is available in the documents.`
 
-    const result = await chatModel.generateContent(prompt)
+    let result
+    
+    // If we have images, send them along with the prompt
+    if (pageImages.length > 0) {
+      console.log(`Sending ${pageImages.length} page images to Gemini Vision`)
+      
+      const parts = [
+        { text: textPrompt },
+        ...pageImages.map(img => ({
+          inlineData: {
+            mimeType: img.mimeType,
+            data: img.data
+          }
+        }))
+      ]
+      
+      result = await chatModel.generateContent(parts)
+    } else {
+      // Text-only prompt
+      result = await chatModel.generateContent(textPrompt)
+    }
+    
     const response = result.response.text()
 
     const finalResponse = sources.size > 0 
