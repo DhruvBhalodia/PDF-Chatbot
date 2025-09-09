@@ -5,14 +5,17 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
 
 const SYSTEM_PROMPT = `You are a professional assistant specialized in analyzing and answering questions about PDFs. 
+You can analyze both text content and images from PDF pages.
 Provide comprehensive, detailed answers based on the document content provided.
 Be thorough in your analysis while maintaining accuracy.
 
 Rules:
-- Use ALL the provided context to give complete answers
+- Use ALL the provided context (text and/or images) to give complete answers
+- If images are provided, analyze them carefully for any text, diagrams, or visual information
 - When analyzing resumes or documents, provide detailed feedback covering all aspects
 - Include specific examples and quotes from the text when relevant
 - For evaluation questions, provide structured analysis with strengths, weaknesses, and suggestions
+- If the pages appear to be scanned or image-based, mention this and still provide analysis based on what you can see
 - Cite sources at the END of your response, not inline
 - If asked to analyze quality, provide professional assessment with actionable feedback`
 
@@ -150,11 +153,22 @@ export async function POST(request: NextRequest) {
           
           if (pages && pages.length > 0) {
             for (const page of pages) {
+              sources.add(`[${doc.title}, Page ${page.page_number}]`)
+              
+              // Include both text and image URL for comprehensive analysis
               if (page.text && page.text.length > 10) {
-                sources.add(`[${doc.title}, Page ${page.page_number}]`)
                 // Send more text for better context (2000 chars instead of 500)
                 const textContent = page.text.substring(0, 2000)
-                context += `\n\n---\nSource: ${doc.title}, Page ${page.page_number}\nText content:\n${textContent}${page.text.length > 2000 ? '...' : ''}`
+                context += `\n\n---\nSource: ${doc.title}, Page ${page.page_number}\n`
+                context += `Text content:\n${textContent}${page.text.length > 2000 ? '...' : ''}\n`
+              } else {
+                context += `\n\n---\nSource: ${doc.title}, Page ${page.page_number}\n`
+                context += `[This page appears to be image-based or scanned content]\n`
+              }
+              
+              // Add image URL for Gemini Vision
+              if (page.image_url) {
+                context += `Page snapshot available at: ${page.image_url}\n`
               }
             }
           }
@@ -162,7 +176,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const chatModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
+    const chatModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-latest' })
     
     const prompt = context && context.length > 0 
       ? `${SYSTEM_PROMPT}

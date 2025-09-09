@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Upload, X, Loader2, FileText, CheckCircle } from 'lucide-react'
 import { generateFingerprint, formatBytes } from '@/lib/utils'
@@ -43,7 +43,7 @@ export default function SimplePDFUploader({ workspaceId, onSuccess, onClose }: S
     setError('')
   }
 
-  const extractTextFromPDF = async (file: File): Promise<{ pages: Array<{ text: string, pageNumber: number }>, pageCount: number }> => {
+  const processPDFPages = async (file: File): Promise<{ pages: Array<{ text: string, pageNumber: number, imageBlob: Blob }>, pageCount: number }> => {
     const arrayBuffer = await file.arrayBuffer()
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
     const pageCount = pdf.numPages
@@ -51,15 +51,40 @@ export default function SimplePDFUploader({ workspaceId, onSuccess, onClose }: S
 
     for (let i = 1; i <= pageCount; i++) {
       const page = await pdf.getPage(i)
-      const textContent = await page.getTextContent()
-      const pageText = textContent.items
-        .map((item: any) => item.str)
-        .join(' ')
-        .trim()
       
-      if (pageText) {
-        pages.push({ text: pageText, pageNumber: i })
+      // Try to extract text
+      let pageText = ''
+      try {
+        const textContent = await page.getTextContent()
+        pageText = textContent.items
+          .map((item: any) => item.str)
+          .join(' ')
+          .trim()
+      } catch (err) {
+        console.log(`Could not extract text from page ${i}`);
       }
+      
+      // Create page snapshot image
+      const viewport = page.getViewport({ scale: 1.5 })
+      const canvas = document.createElement('canvas')
+      const context = canvas.getContext('2d')!
+      canvas.height = viewport.height
+      canvas.width = viewport.width
+
+      await page.render({
+        canvasContext: context,
+        viewport: viewport
+      }).promise
+
+      const imageBlob = await new Promise<Blob>((resolve) => {
+        canvas.toBlob((blob) => resolve(blob!), 'image/jpeg', 0.85)
+      })
+      
+      pages.push({ 
+        text: pageText || `[Page ${i} - Image/Scanned Content]`, 
+        pageNumber: i,
+        imageBlob
+      })
     }
 
     return { pages, pageCount }
@@ -73,17 +98,15 @@ export default function SimplePDFUploader({ workspaceId, onSuccess, onClose }: S
     setError('')
 
     try {
-      setStatus('Extracting text from PDF...')
+      setStatus('Processing PDF pages...')
       setProgress(5)
       
-      // Extract text from PDF
-      const { pages: extractedPages, pageCount } = await extractTextFromPDF(file)
+      // Process PDF pages (extract text and create snapshots)
+      const { pages: extractedPages, pageCount } = await processPDFPages(file)
       
       if (!extractedPages || extractedPages.length === 0) {
-        throw new Error('Could not extract text from PDF. The document may be empty or contain only images.')
+        throw new Error('Could not process PDF. The document may be empty.')
       }
-      
-      const fullText = extractedPages.map(p => p.text).join('\n\n')
       
       // Get authenticated user
       const { data: { user } } = await supabase.auth.getUser()
@@ -107,39 +130,39 @@ export default function SimplePDFUploader({ workspaceId, onSuccess, onClose }: S
 
       if (docError) throw docError
 
-      // Upload the PDF file directly
-      setStatus('Uploading PDF...')
-      setProgress(30)
+      // Upload page snapshots
+      setStatus('Uploading page snapshots...')
+      const pageRecords = []
       
-      const pdfPath = `${document.id}/original.pdf`
-      const { error: uploadError } = await supabase.storage
-        .from('pdf-pages')
-        .upload(pdfPath, file, {
-          contentType: 'application/pdf',
-          upsert: false
+      for (let i = 0; i < extractedPages.length; i++) {
+        const page = extractedPages[i]
+        setProgress(30 + (i / extractedPages.length) * 40)
+        
+        const imageName = `${document.id}/page-${page.pageNumber}.jpg`
+        const { error: uploadError } = await supabase.storage
+          .from('pdf-pages')
+          .upload(imageName, page.imageBlob, {
+            contentType: 'image/jpeg',
+            upsert: true
+          })
+
+        if (uploadError && !uploadError.message.includes('already exists')) {
+          console.error(`Failed to upload page ${page.pageNumber}:`, uploadError)
+        }
+
+        const { data: { publicUrl } } = supabase.storage
+          .from('pdf-pages')
+          .getPublicUrl(imageName)
+        
+        pageRecords.push({
+          document_id: document.id,
+          page_number: page.pageNumber,
+          image_url: publicUrl,
+          text: page.text,
+          tokens: page.text.split(' ').length,
+          fingerprint64: generateFingerprint(page.text || `page-${page.pageNumber}`)
         })
-
-      if (uploadError && !uploadError.message.includes('already exists')) {
-        throw uploadError
       }
-
-      // Get public URL
-      const { data: { publicUrl } } = supabase.storage
-        .from('pdf-pages')
-        .getPublicUrl(pdfPath)
-
-      // Create page records with extracted text for each page
-      setStatus('Saving extracted text...')
-      setProgress(70)
-      
-      const pageRecords = extractedPages.map((page, index) => ({
-        document_id: document.id,
-        page_number: page.pageNumber,
-        image_url: publicUrl,
-        text: page.text,
-        tokens: page.text.split(' ').length,
-        fingerprint64: generateFingerprint(page.text)
-      }))
       
       const { error: pageError } = await supabase
         .from('pages')

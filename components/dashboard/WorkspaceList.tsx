@@ -1,8 +1,11 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
-import { FolderOpen, FileText, Calendar, Trash2 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { FolderOpen, FileText, Calendar, Trash2, Loader2 } from 'lucide-react'
 import { formatDistanceToNow } from '@/lib/utils'
+import { useToast } from '@/hooks/useToast'
 
 interface Workspace {
   id: string
@@ -13,9 +16,41 @@ interface Workspace {
 
 interface WorkspaceListProps {
   workspaces: Workspace[]
+  userId: string
 }
 
-export default function WorkspaceList({ workspaces }: WorkspaceListProps) {
+export default function WorkspaceList({ workspaces, userId }: WorkspaceListProps) {
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const router = useRouter()
+  const { showToast } = useToast()
+
+  const handleDelete = async (e: React.MouseEvent, workspaceId: string, workspaceName: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    
+    if (!confirm(`Are you sure you want to delete the workspace "${workspaceName}"? This will permanently delete all documents, chats, and data associated with this workspace.`)) {
+      return
+    }
+    
+    setDeleting(workspaceId)
+    
+    try {
+      const response = await fetch(`/api/workspace/delete?id=${workspaceId}`, {
+        method: 'DELETE'
+      })
+      
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Failed to delete workspace')
+      }
+      
+      showToast('Workspace deleted successfully', 'success')
+      router.refresh()
+    } catch (error: any) {
+      showToast(error.message || 'Failed to delete workspace', 'error')
+      setDeleting(null)
+    }
+  }
   if (workspaces.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
@@ -35,27 +70,44 @@ export default function WorkspaceList({ workspaces }: WorkspaceListProps) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
       {workspaces.map((workspace) => (
-        <Link
+        <div
           key={workspace.id}
-          href={`/dashboard/workspace/${workspace.id}`}
-          className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-lg transition-shadow"
+          className="relative bg-white rounded-xl border border-gray-200 p-6 hover:shadow-lg transition-shadow group"
         >
-          <div className="flex items-start justify-between mb-4">
-            <div className="p-3 bg-primary/10 rounded-lg">
-              <FolderOpen className="w-6 h-6 text-primary" />
+          <Link
+            href={`/dashboard/workspace/${workspace.id}`}
+            className="block"
+          >
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 bg-primary/10 rounded-lg">
+                <FolderOpen className="w-6 h-6 text-primary" />
+              </div>
+              <span className="text-xs font-medium text-gray-500 uppercase">{workspace.plan}</span>
             </div>
-            <span className="text-xs font-medium text-gray-500 uppercase">{workspace.plan}</span>
-          </div>
-          
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">{workspace.name}</h3>
-          
-          <div className="flex items-center gap-4 text-sm text-gray-600">
-            <div className="flex items-center gap-1">
-              <Calendar className="w-4 h-4" />
-              <span>{formatDistanceToNow(workspace.created_at)}</span>
+            
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">{workspace.name}</h3>
+            
+            <div className="flex items-center gap-4 text-sm text-gray-600">
+              <div className="flex items-center gap-1">
+                <Calendar className="w-4 h-4" />
+                <span>{formatDistanceToNow(workspace.created_at)}</span>
+              </div>
             </div>
-          </div>
-        </Link>
+          </Link>
+          
+          <button
+            onClick={(e) => handleDelete(e, workspace.id, workspace.name)}
+            disabled={deleting === workspace.id}
+            className="absolute top-4 right-4 p-2 bg-red-50 text-red-600 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-100 transition disabled:opacity-50"
+            title="Delete workspace"
+          >
+            {deleting === workspace.id ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Trash2 className="w-4 h-4" />
+            )}
+          </button>
+        </div>
       ))}
     </div>
   )
