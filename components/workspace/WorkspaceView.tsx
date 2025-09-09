@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { FileText, Plus } from 'lucide-react'
-import PDFUploader from './PDFUploader'
+import PDFUploader from './SimplePDFUploader'
 import ChatInterface from './ChatInterface'
 import DocumentList from './DocumentList'
 

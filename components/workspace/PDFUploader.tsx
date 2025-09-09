@@ -89,19 +89,24 @@ export default function PDFUploader({ workspaceId, onClose, onSuccess }: PDFUplo
         const page = await pdf.getPage(pageNum)
         
         const viewport = page.getViewport({ scale: 2.0 })
-        const canvas = document.createElement('canvas')
-        const context = canvas.getContext('2d')!
-        canvas.height = viewport.height
-        canvas.width = viewport.width
+        
+        // Only create canvas if we're in the browser
+        let blob: Blob | null = null
+        if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+          const canvas = document.createElement('canvas')
+          const context = canvas.getContext('2d')!
+          canvas.height = viewport.height
+          canvas.width = viewport.width
 
-        await page.render({
-          canvasContext: context,
-          viewport: viewport
-        }).promise
+          await page.render({
+            canvasContext: context,
+            viewport: viewport
+          }).promise
 
-        const blob = await new Promise<Blob>((resolve) => {
-          canvas.toBlob((blob) => resolve(blob!), 'image/jpeg', 0.85)
-        })
+          blob = await new Promise<Blob>((resolve) => {
+            canvas.toBlob((blob) => resolve(blob!), 'image/jpeg', 0.85)
+          })
+        }
 
         const textContent = await page.getTextContent()
         const text = textContent.items
@@ -109,23 +114,27 @@ export default function PDFUploader({ workspaceId, onClose, onSuccess }: PDFUplo
           .join(' ')
           .trim()
 
-        const imageName = `${document.id}/page-${pageNum}.jpg`
-        setStatus(`Uploading page ${pageNum}/${numPages}...`)
-        
-        const { error: uploadError } = await supabase.storage
-          .from('pdf-pages')
-          .upload(imageName, blob, {
-            contentType: 'image/jpeg',
-            upsert: false
-          })
+        let publicUrl = ''
+        if (blob) {
+          const imageName = `${document.id}/page-${pageNum}.jpg`
+          setStatus(`Uploading page ${pageNum}/${numPages}...`)
+          
+          const { error: uploadError } = await supabase.storage
+            .from('pdf-pages')
+            .upload(imageName, blob, {
+              contentType: 'image/jpeg',
+              upsert: false
+            })
 
-        if (uploadError && !uploadError.message.includes('already exists')) {
-          throw uploadError
+          if (uploadError && !uploadError.message.includes('already exists')) {
+            throw uploadError
+          }
+
+          const { data } = supabase.storage
+            .from('pdf-pages')
+            .getPublicUrl(imageName)
+          publicUrl = data.publicUrl
         }
-
-        const { data: { publicUrl } } = supabase.storage
-          .from('pdf-pages')
-          .getPublicUrl(imageName)
 
         pages.push({
           document_id: document.id,
